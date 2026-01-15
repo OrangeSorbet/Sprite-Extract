@@ -6,53 +6,15 @@ Advanced Sprite Separator & Naming Tool for AgriVidya
 - Drag sidebar items to reorder (updates animation order automatically)
 - Save & Next: trims transparent pixels, saves PNGs with naming rules and writes assets/split_sprites.json
 """
-# Only while running as script
-# import prerequisites
-# prerequisites.check_and_install()
+
 import tkinter as tk
-from tkinter import filedialog, messagebox, colorchooser
-from PIL import Image, ImageTk, ImageDraw, ImageOps
+from tkinter import filedialog, messagebox
+from PIL import Image, ImageTk
 import json, os
+import prerequisites
 import time
 import threading
-
-def launch_gui_selector():
-    """Launches a simple GUI for selecting spritesheet images with instructions."""
-    def browse_files():
-        filetypes = [("Image files", "*.png;*.jpg;*.jpeg;*.bmp")]
-        paths = filedialog.askopenfilenames(title="Select spritesheet images", filetypes=filetypes)
-        if paths:
-            # Close selector and launch SpriteExtractor
-            selector_root.destroy()
-            root = tk.Tk()
-            root.deiconify()
-            app = SpriteExtractor(root, paths)
-            root.mainloop()
-
-    selector_root = tk.Tk()
-    selector_root.title("Sprite Extractor - Select Spritesheet")
-    selector_root.geometry("500x300")
-    selector_root.resizable(False, False)
-
-    # Instructions
-    instr = (
-        "Welcome to the Sprite Extractor & Naming Tool!\n\n"
-        "This app allows you to:\n"
-        "- Select one or more spritesheet images.\n"
-        "- Draw rectangles around individual sprites.\n"
-        "- Assign names and mark frames as 'Animation' if needed.\n"
-        "- Drag sidebar items to reorder frames.\n"
-        "- Save trimmed sprites and automatically generate a JSON metadata file.\n\n"
-        "Click 'Browse Spritesheet' to begin."
-    )
-    label = tk.Label(selector_root, text=instr, justify="left", wraplength=480, padx=10, pady=10)
-    label.pack(pady=20)
-
-    # Browse button
-    browse_btn = tk.Button(selector_root, text="Browse Spritesheet", command=browse_files, width=25, height=2)
-    browse_btn.pack(pady=20)
-
-    selector_root.mainloop()
+prerequisites.check_and_install()
 
 def trim_transparent(im):
     """Trim transparent borders from an RGBA image. Returns trimmed image and bbox relative to original."""
@@ -66,124 +28,6 @@ def trim_transparent(im):
     else:
         # fully transparent
         return im, (0, 0, im.width, im.height)
-
-class StickerEditPopup(tk.Toplevel):
-    def __init__(self, parent, img, apply_callback, initial_border_color="#ffffff", initial_border_size=5):
-        super().__init__(parent)
-        self.title("Sticker Editor")
-        self.parent = parent
-        self.original_img = img.convert("RGBA")
-        self.working_img = self.original_img.copy()
-        self.apply_callback = apply_callback
-
-        # Persisted settings
-        self.border_color = tk.StringVar(value=initial_border_color)
-        self.border_size = tk.IntVar(value=initial_border_size)
-        self.brush_mode = tk.StringVar(value="remove")
-        self.brush_size = tk.IntVar(value=15)
-
-        # Canvas for painting
-        self.preview_canvas = tk.Canvas(self, width=400, height=400, bg="#444")
-        self.preview_canvas.grid(row=0, column=0, rowspan=6, padx=10, pady=10)
-        self.preview_canvas.bind("<B1-Motion>", self.paint)
-        self.preview_canvas.bind("<Button-1>", self.paint)
-        self.preview_canvas.bind("<ButtonRelease-1>", self.commit_stroke)
-
-        # Border controls
-        tk.Label(self, text="Border Size").grid(row=0, column=1, sticky="w")
-        tk.Scale(self, from_=0, to=50, orient="horizontal",
-                 variable=self.border_size,
-                 command=lambda e: self.update_preview()).grid(row=1, column=1, sticky="ew")
-
-        tk.Button(self, text="Pick Border Color", command=self.pick_color).grid(row=2, column=1, sticky="ew", pady=5)
-
-        # Brush controls
-        brush_frame = tk.LabelFrame(self, text="Brush", padx=5, pady=5)
-        brush_frame.grid(row=0, column=2, rowspan=3, sticky="ns")
-        tk.Radiobutton(brush_frame, text="Remove", variable=self.brush_mode, value="remove").pack(anchor="w")
-        tk.Radiobutton(brush_frame, text="Restore", variable=self.brush_mode, value="restore").pack(anchor="w")
-        tk.Label(brush_frame, text="Brush Size").pack(anchor="w")
-        tk.Scale(brush_frame, from_=1, to=100, orient="horizontal", variable=self.brush_size).pack(anchor="w")
-
-        # Buttons
-        tk.Button(self, text="Apply & Close", command=self.apply).grid(row=5, column=1, columnspan=2, sticky="ew", pady=10)
-
-        # Variables for painting
-        self.last_x = None
-        self.last_y = None
-        self.mask = Image.new("L", self.working_img.size, 255)  # 255 opaque, 0 transparent
-
-        # Initial render
-        self.update_preview()
-
-    # ---------- Color and Border ------------
-    def pick_color(self):
-        color = colorchooser.askcolor(title="Choose border color")
-        if color[1]:
-            self.border_color.set(color[1])
-            self.update_preview()
-
-    def add_border(self, img, border_size, border_color):
-        bordered = ImageOps.expand(img, border=border_size, fill=border_color)
-        return bordered
-
-    # ---------- Painting -------------------
-    def paint(self, event):
-        x, y = event.x, event.y
-        if self.last_x is None:
-            self.last_x, self.last_y = x, y
-        brush = self.brush_size.get()
-        draw = ImageDraw.Draw(self.mask)
-        # Convert from canvas coords to image coords
-        img_w, img_h = self.working_img.size
-        canvas_w = self.preview_canvas.winfo_width()
-        canvas_h = self.preview_canvas.winfo_height()
-        scale_x = img_w / canvas_w
-        scale_y = img_h / canvas_h
-        x_i = int(x * scale_x)
-        y_i = int(y * scale_y)
-        r = int(brush * scale_x / 2)
-
-        if self.brush_mode.get() == "remove":
-            draw.ellipse((x_i - r, y_i - r, x_i + r, y_i + r), fill=0)
-        else:
-            draw.ellipse((x_i - r, y_i - r, x_i + r, y_i + r), fill=255)
-
-        self.update_preview()
-        self.last_x, self.last_y = x, y
-
-    def commit_stroke(self, event):
-        self.last_x = None
-        self.last_y = None
-
-    # ---------- Rendering -------------------
-    def update_preview(self):
-        """Render current image + transparency + border preview."""
-        # Apply mask to working copy
-        painted = self.working_img.copy()
-        painted.putalpha(self.mask)
-
-        # Border
-        bordered = self.add_border(painted, self.border_size.get(), self.border_color.get())
-
-        # Combine with semi-transparent original for guide view
-        overlay = self.original_img.copy().resize(bordered.size)
-        overlay.putalpha(128)
-        composite = Image.alpha_composite(overlay, bordered)
-
-        preview_resized = composite.resize((400, 400), Image.NEAREST)
-        self.preview_img_tk = ImageTk.PhotoImage(preview_resized)
-        self.preview_canvas.delete("all")
-        self.preview_canvas.create_image(0, 0, image=self.preview_img_tk, anchor="nw")
-
-    # ---------- Apply and Return ------------
-    def apply(self):
-        """Finalize edits and return bordered image."""
-        final_img = self.working_img.copy()
-        final_img.putalpha(self.mask)
-        bordered = self.add_border(final_img, self.border_size.get(), self.border_color.get())
-        self.apply_callback(bordered, self.border_color.get(), self.border_size.get())
-        self.destroy()
 
 class SidebarItem(tk.Frame):
     """A single sidebar entry: thumbnail, text entry, toggle, order label, delete button. Draggable."""
@@ -270,7 +114,7 @@ class SpriteExtractor:
         self.output_folder = os.path.join("assets", "sprites")
         os.makedirs(self.output_folder, exist_ok=True)
         os.makedirs("assets", exist_ok=True)
-        self.show_grid = tk.BooleanVar(value=False)
+        self.show_grid = tk.BooleanVar(value=True)
         self.grid_level = tk.IntVar(value=0)  # 0=8,1=16,2=32,3=64
 
         self.load_image()
@@ -400,24 +244,6 @@ class SpriteExtractor:
         self.side_window = self.side_scroll.create_window((0, 0), window=self.side_frame, anchor="nw")
         self.side_frame.bind("<Configure>", lambda e: self.side_scroll.configure(scrollregion=self.side_scroll.bbox("all")))
 
-        # Enable scrolling with mouse wheel anywhere over thumbnails
-        def _on_mousewheel(event):
-            # For Windows / Mac / Linux delta differences
-            delta = 0
-            if event.num == 5 or event.delta < 0:
-                delta = 1
-            elif event.num == 4 or event.delta > 0:
-                delta = -1
-            self.side_scroll.yview_scroll(delta, "units")
-
-        # Bind mousewheel scrolling to canvas
-        self.side_frame.bind("<Enter>", lambda e: self.side_frame.bind_all("<MouseWheel>", _on_mousewheel))
-        self.side_frame.bind("<Leave>", lambda e: self.side_frame.unbind_all("<MouseWheel>"))
-
-        # For Linux systems using Button-4 / Button-5
-        self.side_frame.bind("<Button-4>", _on_mousewheel)
-        self.side_frame.bind("<Button-5>", _on_mousewheel)
-
         # Instructions
         self.instructions = tk.Label(
             self.sidebar_container,
@@ -446,7 +272,6 @@ class SpriteExtractor:
         # Top row
         top_row = tk.Frame(btn_frame, bg="#f5f5f5")
         top_row.pack(side="top", fill="x", pady=2)
-        tk.Button(btn_frame, text="Toggle All Animations", command=self.toggle_all_animations).pack(side="top", fill="x", pady=2, padx=4)
         tk.Button(top_row, text="Map & Next", command=self.map_sprites).pack(side="left", expand=True, fill="x", padx=2)
         tk.Button(top_row, text="Split & Next", command=self.save_sprites).pack(side="left", expand=True, fill="x", padx=2)
         tk.Button(top_row, text="Auto Detect Sprites", command=self.auto_detect_sprites).pack(side="left", expand=True, fill="x", padx=2)
@@ -454,7 +279,6 @@ class SpriteExtractor:
         # Bottom row
         bottom_row = tk.Frame(btn_frame, bg="#f5f5f5")
         bottom_row.pack(side="top", fill="x", pady=2)
-        tk.Button(bottom_row, text="Sticker Mode", command=self.open_sticker_popup).pack(side="left", expand=True, fill="x", padx=2)
         tk.Button(bottom_row, text="Skip", command=self.skip).pack(side="left", expand=True, fill="x", padx=2)
         tk.Button(bottom_row, text="Cancel", command=self.root.quit).pack(side="left", expand=True, fill="x", padx=2)
         tk.Button(bottom_row, text="Background Remover", command=self.enable_bg_pick).pack(side="left", expand=True, fill="x", padx=2)
@@ -505,68 +329,41 @@ class SpriteExtractor:
         self.canvas.bind("<Button-1>", self.on_press)
 
     def remove_background(self, img, color, tolerance=20):
+        """
+        Remove background color by making similar pixels transparent.
+        `color` is (R,G,B), tolerance controls how strict the match is.
+        """
         if img.mode != "RGBA":
             img = img.convert("RGBA")
-        datas = img.load()
-        w, h = img.size
-
-        # Detect enclosed regions to preserve
-        from collections import deque
-        visited = set()
-        preserve = set()
-
-        def inside_bounds(x, y): return 0 <= x < w and 0 <= y < h
-
-        # Flood fill from borders to mark background regions
-        q = deque([(x, y) for x in range(w) for y in (0, h-1)] + [(x, y) for y in range(h) for x in (0, w-1)])
-        while q:
-            x, y = q.popleft()
-            if (x, y) in visited: continue
-            visited.add((x, y))
-            r, g, b, a = datas[x, y]
+        datas = img.getdata()
+        new_data = []
+        for item in datas:
+            r, g, b, a = item
             if abs(r - color[0]) <= tolerance and abs(g - color[1]) <= tolerance and abs(b - color[2]) <= tolerance:
-                for nx, ny in ((x+1,y),(x-1,y),(x,y+1),(x,y-1)):
-                    if inside_bounds(nx, ny): q.append((nx, ny))
+                new_data.append((r, g, b, 0))  # transparent
             else:
-                preserve.add((x, y))
-
-        # Make transparent only background-connected regions, not bounded interior fills
-        for x in range(w):
-            for y in range(h):
-                r, g, b, a = datas[x, y]
-                if (x, y) not in preserve and abs(r - color[0]) <= tolerance and abs(g - color[1]) <= tolerance and abs(b - color[2]) <= tolerance:
-                    datas[x, y] = (r, g, b, 0)
-
+                new_data.append(item)
+        img.putdata(new_data)
         return img
-
-    def toggle_all_animations(self):
-        """Toggle all sidebar items animations on/off depending on current state."""
-        # Check if all are currently on
-        all_on = all(item.is_animation.get() for item in self.sidebar_items)
-        new_state = not all_on  # If all on, turn off; otherwise, turn on
-
-        for item in self.sidebar_items:
-            item.is_animation.set(new_state)
-
-        self.update_orders()
-        self.redraw_highlights()
 
     def auto_detect_sprites(self):
         """
         Automatically detect sprites separated by transparent pixels or chosen background color.
         Adds them as sidebar items (highlight + thumbnails) without saving PNGs.
-        Priority ordering: left -> right, then top -> bottom.
         """
         img = self.img_full.copy()
         if img.mode != "RGBA":
             img = img.convert("RGBA")
 
-        width, height = img.size
+        alpha = img.split()[-1]
         visited = set()
+        width, height = img.size
 
+        # Decide background removal color
         bg_color = self.bg_remove_color if self.bg_remove_enabled and self.bg_remove_color else None
-        tolerance = 20
+        tolerance = 20  # pixels within this range are considered background
 
+        # Helper to check if pixel is "transparent" for detection
         def is_transparent(px):
             if bg_color:
                 r, g, b, a = px
@@ -578,12 +375,15 @@ class SpriteExtractor:
             else:
                 return px[3] == 0
 
+        # Simple flood-fill detection for non-transparent regions
         def flood_fill(x, y):
             stack = [(x, y)]
-            bbox = [x, y, x, y]
+            bbox = [x, y, x, y]  # left, top, right, bottom
             while stack:
                 cx, cy = stack.pop()
-                if (cx, cy) in visited or cx < 0 or cy < 0 or cx >= width or cy >= height:
+                if (cx, cy) in visited:
+                    continue
+                if cx < 0 or cy < 0 or cx >= width or cy >= height:
                     continue
                 pixel = img.getpixel((cx, cy))
                 if is_transparent(pixel):
@@ -593,47 +393,35 @@ class SpriteExtractor:
                 bbox[1] = min(bbox[1], cy)
                 bbox[2] = max(bbox[2], cx)
                 bbox[3] = max(bbox[3], cy)
-                stack.extend([(cx+1, cy), (cx-1, cy), (cx, cy+1), (cx, cy-1)])
+                # Add neighbors
+                neighbors = [(cx+1, cy), (cx-1, cy), (cx, cy+1), (cx, cy-1)]
+                stack.extend(neighbors)
             return tuple(bbox)
 
-        # Collect all non-transparent bounding boxes first
-        boxes = []
+        # Scan all pixels
         for y in range(height):
             for x in range(width):
-                if (x, y) not in visited and not is_transparent(img.getpixel((x, y))):
-                    boxes.append(flood_fill(x, y))
+                pixel = img.getpixel((x, y))
+                if (x, y) not in visited and not is_transparent(pixel):
+                    x1, y1, x2, y2 = flood_fill(x, y)
+                    # Crop the sprite
+                    cropped = img.crop((x1, y1, x2+1, y2+1))
+                    preview_img = cropped.copy()
+                    preview_img.thumbnail((64, 64), Image.NEAREST)
 
-        # Sort by left->right, then top->bottom
-        line_tolerance = 10  # pixels
+                    # Canvas coords approximation
+                    cx1, cy1 = self.image_to_canvas_coords(x1, y1)
+                    cx2, cy2 = self.image_to_canvas_coords(x2+1, y2+1)
+                    self.selection_boxes.append((cx1, cy1, cx2, cy2))
+                    self.previews.append(cropped)
 
-        def sort_key(bbox):
-            x1, y1, x2, y2 = bbox
-            line_index = int(y1 / line_tolerance)
-            return (line_index, x1)
-
-        boxes.sort(key=sort_key)
-
-        # Add sorted boxes to sidebar
-        for x1, y1, x2, y2 in boxes:
-            cropped = img.crop((x1, y1, x2+1, y2+1))
-            preview_img = cropped.copy()
-            preview_img.thumbnail((64, 64), Image.NEAREST)
-
-            cx1, cy1 = self.image_to_canvas_coords(x1, y1)
-            cx2, cy2 = self.image_to_canvas_coords(x2+1, y2+1)
-            self.selection_boxes.append((cx1, cy1, cx2, cy2))
-            self.previews.append(cropped)
-
-            item = SidebarItem(
-                self.side_frame,
-                preview_img,
-                default_name=f"auto_{len(self.sidebar_items)}",
-                on_delete=self.delete_item,
-                on_toggle_change=lambda: (self.update_orders(), self.redraw_highlights()),
-                on_reorder_request=self.handle_reorder_request
-            )
-            item.pack(fill="x", pady=4, padx=4)
-            self.sidebar_items.append(item)
+                    # Sidebar item
+                    item = SidebarItem(self.side_frame, preview_img, default_name=f"auto_{len(self.sidebar_items)}",
+                                    on_delete=self.delete_item,
+                                    on_toggle_change=lambda: (self.update_orders(), self.redraw_highlights()),
+                                    on_reorder_request=self.handle_reorder_request)
+                    item.pack(fill="x", pady=4, padx=4)
+                    self.sidebar_items.append(item)
 
         self.update_orders()
         self.redraw_highlights()
@@ -688,26 +476,6 @@ class SpriteExtractor:
 
         self.canvas.coords(self.canvas_image_id, self._offset_x, self._offset_y)
         self.draw_grid()
-        self.redraw_highlights()
-
-    def open_sticker_popup(self):
-        if not self.sidebar_items:
-            messagebox.showinfo("No sprite", "Select or detect at least one sprite first.")
-            return
-        idx = len(self.sidebar_items) - 1
-        selected_img = self.previews[idx]
-        StickerEditPopup(self.root, selected_img, self.apply_sticker_result)
-
-    def apply_sticker_result(self, bordered_img, color, size):
-        self.last_border_color = color
-        self.last_border_size = size
-        # Replace preview with bordered version
-        idx = len(self.sidebar_items) - 1
-        self.previews[idx] = bordered_img
-        preview_small = bordered_img.copy()
-        preview_small.thumbnail((64, 64), Image.NEAREST)
-        self.sidebar_items[idx].thumb.config(image=ImageTk.PhotoImage(preview_small))
-        self.sidebar_items[idx].thumb.image = ImageTk.PhotoImage(preview_small)
         self.redraw_highlights()
 
     def update_canvas_bg(self):
@@ -1039,9 +807,6 @@ class SpriteExtractor:
             # Trim transparent pixels
             if self.bg_remove_enabled and self.bg_remove_color:
                 cropped = self.remove_background(cropped, self.bg_remove_color)
-            # If sticker editor settings are available, apply border before trimming
-            if hasattr(self, "last_border_size") and self.last_border_size > 0:
-                cropped = StickerEditPopup.add_border(self, cropped, self.last_border_size, self.last_border_color)
             trimmed_img, bbox = trim_transparent(cropped)
             x1, y1, x2, y2 = frame
             left_trim, top_trim = bbox[0], bbox[1]
@@ -1080,26 +845,20 @@ class SpriteExtractor:
 
     def map_sprites(self):
         """
-        Map all selections into a single Phaser-ready JSON (append if exists, create if not).
+        Map all selections into a single Phaser-ready JSON (append to existing if present).
         Static sprites go under 'static', animations under 'animations'.
         """
-        import os, json
-        from tkinter import messagebox
-
         json_path = r"C:\Users\ashvi\Documents\VS_Codes\HTML\Agrividya\Web\sprites.json"
 
-        # Load existing JSON if exists, else initialize
+        # Load existing JSON if it exists
         if os.path.exists(json_path):
             with open(json_path, "r") as f:
-                try:
-                    data = json.load(f)
-                except json.JSONDecodeError:
-                    data = {}
+                data = json.load(f)
+            static_meta = data.get("static", {})
+            animations_meta = data.get("animations", {})
         else:
-            data = {}
-
-        static_meta = data.get("static", {})
-        animations_meta = data.get("animations", {})
+            static_meta = {}
+            animations_meta = {}
 
         anim_counters = {}
         mapped_count = 0
@@ -1108,10 +867,9 @@ class SpriteExtractor:
             frame = self.selection_boxes[i]
             cropped = self.previews[i]
 
-            # Optional: remove background
+            # Trim transparent pixels
             if self.bg_remove_enabled and self.bg_remove_color:
                 cropped = self.remove_background(cropped, self.bg_remove_color)
-
             trimmed_img, bbox = trim_transparent(cropped)
 
             x1, y1, x2, y2 = frame
@@ -1125,42 +883,25 @@ class SpriteExtractor:
             source_name = os.path.basename(self.image_path)
 
             if item.is_animation.get():
-                # Count frames for this animation
                 count = anim_counters.get(base_name, 0) + 1
                 anim_counters[base_name] = count
                 frame_id = f"{base_name}_{count}"
 
-                # Save frame in static
-                static_meta[frame_id] = {
-                    "x": int(final_x),
-                    "y": int(final_y),
-                    "w": int(final_w),
-                    "h": int(final_h),
-                    "source": source_name
-                }
+                frame_data = {"x": int(final_x), "y": int(final_y), "w": int(final_w), "h": int(final_h), "source": source_name}
 
-                # Ensure animation entry exists
-                if base_name not in animations_meta or not isinstance(animations_meta[base_name], dict):
-                    animations_meta[base_name] = {
-                        "frames": [],
-                        "frameRate": 8,
-                        "loop": True
-                    }
+                # Store frame globally
+                static_meta[frame_id] = frame_data
 
+                # Add to animation sequence
+                if base_name not in animations_meta:
+                    animations_meta[base_name] = {"frames": [], "frameRate": 8, "loop": True}
                 animations_meta[base_name]["frames"].append(frame_id)
             else:
-                # Static sprite
-                static_meta[base_name] = {
-                    "x": int(final_x),
-                    "y": int(final_y),
-                    "w": int(final_w),
-                    "h": int(final_h),
-                    "source": source_name
-                }
+                static_meta[base_name] = {"x": int(final_x), "y": int(final_y), "w": int(final_w), "h": int(final_h), "source": source_name}
 
             mapped_count += 1
 
-        # Save JSON back
+        # Save back to JSON
         with open(json_path, "w") as f:
             json.dump({"static": static_meta, "animations": animations_meta}, f, indent=2)
 
@@ -1181,4 +922,15 @@ class SpriteExtractor:
         self.root.quit()
 
 if __name__ == "__main__":
-    launch_gui_selector()
+    # Single root usage: hide for file dialog then show.
+    root = tk.Tk()
+    root.withdraw()
+    filetypes = [("Image files", "*.png;*.jpg;*.jpeg;*.bmp")]
+    img_paths = filedialog.askopenfilenames(title="Select spritesheet images", filetypes=filetypes)
+    if not img_paths:
+        print("No images selected.")
+        root.destroy()
+    else:
+        root.deiconify()
+        app = SpriteExtractor(root, img_paths)
+        root.mainloop()
