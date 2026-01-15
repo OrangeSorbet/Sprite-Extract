@@ -28,7 +28,7 @@ pip install pillow tkinterdnd2 pycryptodome
 # Running the App
 `python sprite_extractor.py`
 
-# Features
+# Features (v1.0.0)
 - Select multiple images, which open one-by-one for processing
 - Draw rectangles on images to select individual sprites
 - Sidebar displays each selection with:
@@ -50,3 +50,17 @@ pip install pillow tkinterdnd2 pycryptodome
 - Generate metadata JSON (assets/split_sprites.json) with frame details
 - Map all selections into a Phaser-ready JSON for static and animation frames
 - Skip images or cancel processing at any time
+
+# v2.0.0
+
+- Undo and redo selection changes.  
+- Background remover with color picking and auto-removal.  
+- Auto-detect sprites separated by transparency or chosen background color.  
+- Zoom in/out using Ctrl + MouseWheel.  
+- Move image on canvas with arrow keys for fine adjustments.  
+- Sidebar scrollable to accommodate large numbers of sprites.  
+- Canvas background color toggle: black or white.  
+- Instructions panel inside the UI for user guidance.  
+- Handles fullscreen mode and responsive canvas resizing.  
+- Grid numbers displayed dynamically while drawing selection rectangles.  
+- "Map & Next" button to generate Phaser-ready JSON for static and animated frames.  

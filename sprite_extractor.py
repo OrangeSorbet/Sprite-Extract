@@ -114,8 +114,45 @@ class SpriteExtractor:
         self.output_folder = os.path.join("assets", "sprites")
         os.makedirs(self.output_folder, exist_ok=True)
         os.makedirs("assets", exist_ok=True)
+        self.show_grid = tk.BooleanVar(value=True)
+        self.grid_level = tk.IntVar(value=0)  # 0=8,1=16,2=32,3=64
 
         self.load_image()
+
+        self.root.bind("<Up>", lambda e: self.move_image(0, -1))
+        self.root.bind("<Down>", lambda e: self.move_image(0, 1))
+        self.root.bind("<Left>", lambda e: self.move_image(-1, 0))
+        self.root.bind("<Right>", lambda e: self.move_image(1, 0))
+        self.history = []
+        self.redo_stack = []
+        self.root.bind("<Control-z>", lambda e: self.undo())
+        self.root.bind("<Control-y>", lambda e: self.redo())
+
+        # Background removal
+        self.bg_remove_enabled = False
+        self.bg_remove_color = None  # (R,G,B) or None
+        self.bg_pick_mode = False
+
+        # Grid toggle checkbox
+        grid_toggle_frame = tk.Frame(self.canvas_container, bg="#333")
+        grid_toggle_frame.place(x=4, y=50, anchor="nw")
+        tk.Checkbutton(grid_toggle_frame, text="Show Grid", variable=self.show_grid,
+                    bg="#333", fg="white", selectcolor="#333",
+                    command=self.draw_grid).pack()
+
+        # Grid size radio buttons
+        size_frame = tk.Frame(self.canvas_container, bg="#333")
+        size_frame.place(x=4, y=80, anchor="nw")
+        tk.Label(size_frame, text="Grid Size:", bg="#333", fg="white").pack(side="left")
+        for i, size in enumerate(reversed(self.grid_sizes)):
+            tk.Radiobutton(
+                size_frame,
+                text=f"{size}x{size}",
+                variable=self.grid_level,
+                value=i,
+                bg="#333", fg="white", selectcolor="#333",
+                command=self.draw_grid
+            ).pack(side="left")
 
     def load_image(self):
         if self.current_index >= len(self.image_paths):
@@ -155,7 +192,27 @@ class SpriteExtractor:
         self.canvas = tk.Canvas(self.canvas_container, cursor="cross", bg=self.canvas_bg_color.get())
         self.canvas.grid(row=0, column=0, sticky="nsew")
         self.canvas_image_id = self.canvas.create_image(0, 0, anchor="nw")
-        
+        self.root.bind_all("<Control-MouseWheel>", self.on_ctrl_mousewheel)
+
+        # --- Grid Snap toggle ---
+        self.grid_snap = tk.BooleanVar(value=False)
+        snap_frame = tk.Frame(self.canvas_container, bg="#333")
+        snap_frame.place(x=4, y=4, anchor="nw")
+
+        tk.Checkbutton(
+            snap_frame,
+            text="Snap to Grid",
+            variable=self.grid_snap,
+            bg="#333",
+            fg="white",
+            selectcolor="#333"
+        ).pack()
+
+        # Visual grid options
+        self.grid_sizes = [8, 16, 32, 64]
+        self.grid_thickness = [0.5, 0.5, 0.5, 0.5]
+        self.grid_level = tk.IntVar(value=0)
+
         # Resize handling
         self._resize_canvas()
         self.canvas.bind("<Configure>", lambda e: self._resize_canvas())
@@ -190,17 +247,41 @@ class SpriteExtractor:
         # Instructions
         self.instructions = tk.Label(
             self.sidebar_container,
-            text="Draw selection on image.\nDrag items to reorder.\nCheck 'Animation' for frames.\nNames without prefixes; _1,_2 suffix added automatically.",
-            bg="#f5f5f5", justify="left"
+            text=(
+                "Instructions:\n"
+                "1. Draw a rectangle on the image to select a sprite.\n"
+                "2. Use 'Snap to Grid' for precise, grid-aligned selections.\n"
+                "3. Use 'Show Grid' and select grid size for visual aid.\n"
+                "4. Enter a name for the sprite in the sidebar.\n"
+                "5. Drag items in the sidebar to reorder; this updates animation frame order.\n"
+                "6. Check 'Animation' for frames that are part of a sequence.\n"
+                "7. Enter sprite names; numbering (_1, _2, ...) is added automatically for animations.\n"
+                "8. Use arrow keys to nudge the image, Ctrl+MouseWheel to zoom.\n"
+                "9. Press 'Save & Next' to save selected sprites and move to the next image.\n"
+                "10. It is preferable to first complete one set of tiles in \nthe image before moving to the next as zoom in/out destroys selection orientation."
+            ),
+            bg="#f5f5f5",
+            justify="left"
         )
         self.instructions.grid(row=1, column=0, sticky="ew", padx=4, pady=6)
 
-        # Buttons
+        # Buttons container
         btn_frame = tk.Frame(self.sidebar_container, bg="#f5f5f5")
         btn_frame.grid(row=2, column=0, sticky="ew", padx=4, pady=6)
-        tk.Button(btn_frame, text="Save & Next", command=self.save_sprites).pack(side="left", expand=True, fill="x", padx=2)
-        tk.Button(btn_frame, text="Skip", command=self.skip).pack(side="left", expand=True, fill="x", padx=2)
-        tk.Button(btn_frame, text="Cancel", command=self.root.quit).pack(side="left", expand=True, fill="x", padx=2)
+
+        # Top row
+        top_row = tk.Frame(btn_frame, bg="#f5f5f5")
+        top_row.pack(side="top", fill="x", pady=2)
+        tk.Button(top_row, text="Map & Next", command=self.map_sprites).pack(side="left", expand=True, fill="x", padx=2)
+        tk.Button(top_row, text="Split & Next", command=self.save_sprites).pack(side="left", expand=True, fill="x", padx=2)
+        tk.Button(top_row, text="Auto Detect Sprites", command=self.auto_detect_sprites).pack(side="left", expand=True, fill="x", padx=2)
+
+        # Bottom row
+        bottom_row = tk.Frame(btn_frame, bg="#f5f5f5")
+        bottom_row.pack(side="top", fill="x", pady=2)
+        tk.Button(bottom_row, text="Skip", command=self.skip).pack(side="left", expand=True, fill="x", padx=2)
+        tk.Button(bottom_row, text="Cancel", command=self.root.quit).pack(side="left", expand=True, fill="x", padx=2)
+        tk.Button(bottom_row, text="Background Remover", command=self.enable_bg_pick).pack(side="left", expand=True, fill="x", padx=2)
 
         # Internal lists per image
         self.selection_boxes = []
@@ -217,6 +298,135 @@ class SpriteExtractor:
         self.canvas.bind("<B1-Motion>", self.on_drag)
         self.canvas.bind("<ButtonRelease-1>", self.on_release)
 
+    def move_image(self, dx, dy):
+        """Move entire image on canvas by dx, dy pixels."""
+        self._offset_x += dx
+        self._offset_y += dy
+        self.canvas.coords(self.canvas_image_id, self._offset_x, self._offset_y)
+
+        # Move highlights as well
+        for idx, box in enumerate(self.selection_boxes):
+            x1, y1, x2, y2 = box
+            self.selection_boxes[idx] = (x1 + dx, y1 + dy, x2 + dx, y2 + dy)
+
+        self.redraw_highlights()
+
+    def enable_bg_pick(self):
+        messagebox.showinfo("Pick Color", "Click on the canvas to pick a background color.")
+        self.bg_pick_mode = True
+        self.canvas.bind("<Button-1>", self.pick_bg_color)
+
+    def pick_bg_color(self, event):
+        if not self.bg_pick_mode:
+            return
+        x, y = self.canvas_to_image_coords(event.x, event.y)
+        pixel = self.img_full.getpixel((x, y))
+        self.bg_remove_color = pixel[:3]  # RGB only
+        self.bg_remove_enabled = True
+        self.bg_pick_mode = False
+        messagebox.showinfo("Background Color Selected", f"Chosen color: {self.bg_remove_color}")
+        # restore normal bindings
+        self.canvas.bind("<Button-1>", self.on_press)
+
+    def remove_background(self, img, color, tolerance=20):
+        """
+        Remove background color by making similar pixels transparent.
+        `color` is (R,G,B), tolerance controls how strict the match is.
+        """
+        if img.mode != "RGBA":
+            img = img.convert("RGBA")
+        datas = img.getdata()
+        new_data = []
+        for item in datas:
+            r, g, b, a = item
+            if abs(r - color[0]) <= tolerance and abs(g - color[1]) <= tolerance and abs(b - color[2]) <= tolerance:
+                new_data.append((r, g, b, 0))  # transparent
+            else:
+                new_data.append(item)
+        img.putdata(new_data)
+        return img
+
+    def auto_detect_sprites(self):
+        """
+        Automatically detect sprites separated by transparent pixels or chosen background color.
+        Adds them as sidebar items (highlight + thumbnails) without saving PNGs.
+        """
+        img = self.img_full.copy()
+        if img.mode != "RGBA":
+            img = img.convert("RGBA")
+
+        alpha = img.split()[-1]
+        visited = set()
+        width, height = img.size
+
+        # Decide background removal color
+        bg_color = self.bg_remove_color if self.bg_remove_enabled and self.bg_remove_color else None
+        tolerance = 20  # pixels within this range are considered background
+
+        # Helper to check if pixel is "transparent" for detection
+        def is_transparent(px):
+            if bg_color:
+                r, g, b, a = px
+                return (a == 0) or (
+                    abs(r - bg_color[0]) <= tolerance and
+                    abs(g - bg_color[1]) <= tolerance and
+                    abs(b - bg_color[2]) <= tolerance
+                )
+            else:
+                return px[3] == 0
+
+        # Simple flood-fill detection for non-transparent regions
+        def flood_fill(x, y):
+            stack = [(x, y)]
+            bbox = [x, y, x, y]  # left, top, right, bottom
+            while stack:
+                cx, cy = stack.pop()
+                if (cx, cy) in visited:
+                    continue
+                if cx < 0 or cy < 0 or cx >= width or cy >= height:
+                    continue
+                pixel = img.getpixel((cx, cy))
+                if is_transparent(pixel):
+                    continue
+                visited.add((cx, cy))
+                bbox[0] = min(bbox[0], cx)
+                bbox[1] = min(bbox[1], cy)
+                bbox[2] = max(bbox[2], cx)
+                bbox[3] = max(bbox[3], cy)
+                # Add neighbors
+                neighbors = [(cx+1, cy), (cx-1, cy), (cx, cy+1), (cx, cy-1)]
+                stack.extend(neighbors)
+            return tuple(bbox)
+
+        # Scan all pixels
+        for y in range(height):
+            for x in range(width):
+                pixel = img.getpixel((x, y))
+                if (x, y) not in visited and not is_transparent(pixel):
+                    x1, y1, x2, y2 = flood_fill(x, y)
+                    # Crop the sprite
+                    cropped = img.crop((x1, y1, x2+1, y2+1))
+                    preview_img = cropped.copy()
+                    preview_img.thumbnail((64, 64), Image.NEAREST)
+
+                    # Canvas coords approximation
+                    cx1, cy1 = self.image_to_canvas_coords(x1, y1)
+                    cx2, cy2 = self.image_to_canvas_coords(x2+1, y2+1)
+                    self.selection_boxes.append((cx1, cy1, cx2, cy2))
+                    self.previews.append(cropped)
+
+                    # Sidebar item
+                    item = SidebarItem(self.side_frame, preview_img, default_name=f"auto_{len(self.sidebar_items)}",
+                                    on_delete=self.delete_item,
+                                    on_toggle_change=lambda: (self.update_orders(), self.redraw_highlights()),
+                                    on_reorder_request=self.handle_reorder_request)
+                    item.pack(fill="x", pady=4, padx=4)
+                    self.sidebar_items.append(item)
+
+        self.update_orders()
+        self.redraw_highlights()
+        messagebox.showinfo("Auto Detect", f"Added {len(self.sidebar_items)} auto-detected sprites.")
+
     def _resize_canvas(self):
         """Scale image to fit canvas while maintaining aspect ratio."""
         canvas_w = self.canvas.winfo_width()
@@ -228,7 +438,7 @@ class SpriteExtractor:
         self._scale_w = self._scale_h = ratio
         self._offset_x = (canvas_w - img_w * ratio) / 2
         self._offset_y = (canvas_h - img_h * ratio) / 2
-        resized = self.img_full.resize((int(img_w * ratio), int(img_h * ratio)), Image.Resampling.LANCZOS)
+        resized = self.img_full.resize((int(img_w * ratio), int(img_h * ratio)), Image.NEAREST)
         self.tk_img = ImageTk.PhotoImage(resized)
         self.canvas.itemconfig(self.canvas_image_id, image=self.tk_img)
         self.canvas.coords(self.canvas_image_id, self._offset_x, self._offset_y)
@@ -253,7 +463,7 @@ class SpriteExtractor:
             new_h = int(new_w / img_ratio)
 
         # Resize the image for canvas display
-        resized = self.img_full.resize((new_w, new_h), Image.Resampling.LANCZOS)
+        resized = self.img_full.resize((new_w, new_h), Image.NEAREST)
         self.tk_img = ImageTk.PhotoImage(resized)
         self.canvas.itemconfig(self.canvas_image_id, image=self.tk_img)
         self.canvas.image_ref = self.tk_img
@@ -265,6 +475,7 @@ class SpriteExtractor:
         self._offset_y = (canvas_h - new_h) / 2
 
         self.canvas.coords(self.canvas_image_id, self._offset_x, self._offset_y)
+        self.draw_grid()
         self.redraw_highlights()
 
     def update_canvas_bg(self):
@@ -307,6 +518,96 @@ class SpriteExtractor:
         cy = y * self._scale_h + self._offset_y
         return cx, cy
 
+    def on_ctrl_mousewheel(self, event):
+        # 1-pixel zoom in/out
+        delta = 1 if event.delta > 0 else -1
+
+        # Mouse position in canvas
+        mouse_x, mouse_y = event.x, event.y
+
+        # Convert to image coordinates
+        img_x, img_y = self.canvas_to_image_coords(mouse_x, mouse_y)
+
+        # Compute new image size
+        new_w = max(1, int(self.img_full.width * self._scale_w) + delta)
+        new_h = max(1, int(self.img_full.height * self._scale_h) + delta)
+
+        # Update scale factors
+        self._scale_w = new_w / self.img_full.width
+        self._scale_h = new_h / self.img_full.height
+
+        # Resize image
+        resized = self.img_full.resize((new_w, new_h), Image.NEAREST)
+        self.tk_img = ImageTk.PhotoImage(resized)
+        self.canvas.itemconfig(self.canvas_image_id, image=self.tk_img)
+        self.canvas.image_ref = self.tk_img
+
+        # Adjust offset to keep zoom centered on cursor
+        self._offset_x = mouse_x - img_x * self._scale_w
+        self._offset_y = mouse_y - img_y * self._scale_h
+        self.canvas.coords(self.canvas_image_id, self._offset_x, self._offset_y)
+
+        # Do NOT modify self.selection_boxes; they remain in IMAGE coordinates
+        # Redraw highlights in new canvas coordinates
+        self.redraw_highlights()
+
+    def save_history(self):
+        state = {
+            "selection_boxes": list(self.selection_boxes),
+            "previews": list(self.previews),
+            "sidebar_items_names": [item.name_entry.get() for item in self.sidebar_items],
+            "animations": [item.is_animation.get() for item in self.sidebar_items]
+        }
+        self.history.append(state)
+        if len(self.history) > 50:
+            self.history.pop(0)
+
+    def undo(self):
+        if not self.history:
+            return
+        state = self.history.pop()
+        self.redo_stack.append({
+            "selection_boxes": list(self.selection_boxes),
+            "previews": list(self.previews),
+            "sidebar_items_names": [item.name_entry.get() for item in self.sidebar_items],
+            "animations": [item.is_animation.get() for item in self.sidebar_items]
+        })
+        self.restore_state(state)
+        self.redraw_highlights()
+
+    def redo(self):
+        if not self.redo_stack:
+            return
+        state = self.redo_stack.pop()
+        self.save_history()
+        self.restore_state(state)
+
+    def restore_state(self, state):
+        # Clear current sidebar
+        for w in self.sidebar_items:
+            w.destroy()
+        self.sidebar_items = []
+        self.selection_boxes = list(state["selection_boxes"])
+        self.previews = list(state["previews"])
+
+        # Recreate sidebar items
+        for i, cropped in enumerate(self.previews):
+            preview_img = cropped.copy()
+            preview_img.thumbnail((64, 64), Image.NEAREST)
+
+            item = SidebarItem(
+                self.side_frame, preview_img,
+                default_name=state["sidebar_items_names"][i],
+                on_delete=self.delete_item,
+                on_toggle_change=lambda: (self.update_orders(), self.redraw_highlights()),
+                on_reorder_request=self.handle_reorder_request
+            )
+            item.is_animation.set(state["animations"][i])
+            item.pack(fill="x", pady=4, padx=4)
+            self.sidebar_items.append(item)
+
+        self.update_orders()
+        self.redraw_highlights()
 
     def on_press(self, event):
         self.start_x, self.start_y = event.x, event.y
@@ -318,11 +619,34 @@ class SpriteExtractor:
     def on_drag(self, event):
         if self.rect_id:
             self.canvas.coords(self.rect_id, self.start_x, self.start_y, event.x, event.y)
+            
+            # Draw grid-unit numbers
+            self.canvas.delete("coords")
+            x1, y1 = min(self.start_x, event.x), min(self.start_y, event.y)
+            x2, y2 = max(self.start_x, event.x), max(self.start_y, event.y)
+            grid_size = self.grid_sizes[self.grid_level.get()]
+
+            # X-axis numbers
+            for i, cx in enumerate(range(int(x1), int(x2), grid_size), start=1):
+                self.canvas.create_rectangle(cx+1, y1+1, cx+grid_size-1, y1+grid_size-1,
+                                            outline="", fill="yellow", stipple="gray50", tags="coords")
+                self.canvas.create_text(cx+grid_size//2, y1+grid_size//2,
+                                        text=str(i), fill="black", font=("Arial", 8, "bold"), tags="coords")
+
+            # Y-axis numbers
+            for i, cy in enumerate(range(int(y1), int(y2), grid_size), start=1):
+                self.canvas.create_rectangle(x1+1, cy+1, x1+grid_size-1, cy+grid_size-1,
+                                            outline="", fill="red", stipple="gray50", tags="coords")
+                self.canvas.create_text(x1+grid_size//2, cy+grid_size//2,
+                                        text=str(i), fill="black", font=("Arial", 8, "bold"), tags="coords")
 
     def on_release(self, event):
         if not self.rect_id:
             return
         cx1, cy1, cx2, cy2 = map(int, self.canvas.coords(self.rect_id))
+        cx1, cy1 = self.snap_to_grid(cx1, cy1)
+        cx2, cy2 = self.snap_to_grid(cx2, cy2)
+        self.save_history()
         
         if abs(cx2 - cx1) < 2 or abs(cy2 - cy1) < 2:
             # invalid / tiny selection
@@ -337,7 +661,7 @@ class SpriteExtractor:
         
         # Thumbnail for sidebar
         preview_img = cropped.copy()
-        preview_img.thumbnail((64, 64), Image.Resampling.LANCZOS)
+        preview_img.thumbnail((64, 64), Image.NEAREST)
 
         # Create sidebar item
         item = SidebarItem(self.side_frame, preview_img, default_name=f"sprite_{len(self.sidebar_items)}",
@@ -356,7 +680,6 @@ class SpriteExtractor:
         self.rect_id = None
         self.redraw_highlights()
 
-
     def delete_item(self, item):
         idx = self.sidebar_items.index(item)
         item.destroy()
@@ -364,6 +687,8 @@ class SpriteExtractor:
         del self.selection_boxes[idx]
         del self.previews[idx]
         self.update_orders()
+        self.redraw_highlights()
+        self.save_history()
 
     def update_orders(self):
         """
@@ -427,6 +752,40 @@ class SpriteExtractor:
             # During motion, optionally provide visual cue (we don't move until finalize)
             pass
 
+    def snap_to_grid(self, x, y):
+        if self.grid_snap.get():
+            # Snap to currently selected grid size
+            grid_size = self.grid_sizes[self.grid_level.get()]  # 0=8,1=16,2=32,3=64
+            x = round(x / grid_size) * grid_size
+            y = round(y / grid_size) * grid_size
+        return x, y
+
+    def draw_grid(self):
+        self.canvas.delete("grid")
+        if not self.show_grid.get():
+            return
+
+        canvas_w = self.canvas.winfo_width()
+        canvas_h = self.canvas.winfo_height()
+
+        size = self.grid_sizes[self.grid_level.get()]
+        thickness = self.grid_thickness[self.grid_level.get()]
+
+        # vertical lines
+        for x in range(0, canvas_w, size):
+            self.canvas.create_line(x, 0, x, canvas_h, fill="#888", width=thickness, tags="grid")
+        # horizontal lines
+        for y in range(0, canvas_h, size):
+            self.canvas.create_line(0, y, canvas_w, y, fill="#888", width=thickness, tags="grid")
+        self.redraw_highlights()
+
+    def snap_to_grid(self, x, y):
+        if self.grid_snap.get():
+            size = self.grid_sizes[self.grid_level.get()]
+            x = round(x / size) * size
+            y = round(y / size) * size
+        return x, y
+
     def save_sprites(self):
         """
         Save all sprites. Animation frames with same base name get sequential _1, _2 suffixes.
@@ -446,6 +805,8 @@ class SpriteExtractor:
             frame = self.selection_boxes[i]
             cropped = self.previews[i]
             # Trim transparent pixels
+            if self.bg_remove_enabled and self.bg_remove_color:
+                cropped = self.remove_background(cropped, self.bg_remove_color)
             trimmed_img, bbox = trim_transparent(cropped)
             x1, y1, x2, y2 = frame
             left_trim, top_trim = bbox[0], bbox[1]
@@ -480,6 +841,72 @@ class SpriteExtractor:
         # Move to next image
         self.current_index += 1
         messagebox.showinfo("Saved", f"Saved {saved_count} sprites from {os.path.basename(self.image_path)}")
+        self.load_image()
+
+    def map_sprites(self):
+        """
+        Map all selections into a single Phaser-ready JSON (append to existing if present).
+        Static sprites go under 'static', animations under 'animations'.
+        """
+        json_path = r"C:\Users\ashvi\Documents\VS_Codes\HTML\Agrividya\Web\sprites.json"
+
+        # Load existing JSON if it exists
+        if os.path.exists(json_path):
+            with open(json_path, "r") as f:
+                data = json.load(f)
+            static_meta = data.get("static", {})
+            animations_meta = data.get("animations", {})
+        else:
+            static_meta = {}
+            animations_meta = {}
+
+        anim_counters = {}
+        mapped_count = 0
+
+        for i, item in enumerate(self.sidebar_items):
+            frame = self.selection_boxes[i]
+            cropped = self.previews[i]
+
+            # Trim transparent pixels
+            if self.bg_remove_enabled and self.bg_remove_color:
+                cropped = self.remove_background(cropped, self.bg_remove_color)
+            trimmed_img, bbox = trim_transparent(cropped)
+
+            x1, y1, x2, y2 = frame
+            left_trim, top_trim = bbox[0], bbox[1]
+            final_x = x1 + left_trim
+            final_y = y1 + top_trim
+            final_w = bbox[2] - bbox[0]
+            final_h = bbox[3] - bbox[1]
+
+            base_name = item.name_entry.get().strip() or f"sprite_{i}"
+            source_name = os.path.basename(self.image_path)
+
+            if item.is_animation.get():
+                count = anim_counters.get(base_name, 0) + 1
+                anim_counters[base_name] = count
+                frame_id = f"{base_name}_{count}"
+
+                frame_data = {"x": int(final_x), "y": int(final_y), "w": int(final_w), "h": int(final_h), "source": source_name}
+
+                # Store frame globally
+                static_meta[frame_id] = frame_data
+
+                # Add to animation sequence
+                if base_name not in animations_meta:
+                    animations_meta[base_name] = {"frames": [], "frameRate": 8, "loop": True}
+                animations_meta[base_name]["frames"].append(frame_id)
+            else:
+                static_meta[base_name] = {"x": int(final_x), "y": int(final_y), "w": int(final_w), "h": int(final_h), "source": source_name}
+
+            mapped_count += 1
+
+        # Save back to JSON
+        with open(json_path, "w") as f:
+            json.dump({"static": static_meta, "animations": animations_meta}, f, indent=2)
+
+        messagebox.showinfo("Mapped", f"Mapped {mapped_count} sprites from {os.path.basename(self.image_path)}")
+        self.current_index += 1
         self.load_image()
 
     def skip(self):
